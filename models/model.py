@@ -7,11 +7,12 @@ from models.flownet2.models import FlowNet2SD
 
 class convAE(torch.nn.Module):
     def __init__(self, flownet_backbone):
+        super(convAE, self).__init__()
         self.generator = UNet(input_channels=12, output_channel=3)
         self.discriminator = PixelDiscriminator(input_nc=3) 
         self.flownet_backbone = flownet_backbone
-        if flownet_backbone = '2sd'
-            self.flow_net = flow_net = FlowNet2SD()
+        if flownet_backbone == '2sd':
+            self.flow_net = FlowNet2SD()
         else:
             self.flow_net = lite_flow.Network()
 

@@ -21,7 +21,11 @@ from evaluate import val
 
 
 class Trainer(object):
-    def __int__(self, model, optimizer_G, optimizer_D, data_root, train_dataloader, start_iter, flow_backbone, iters, val_interval, dataset, save_interval, train_data, batch_size, show_flow):
+    def __init__(self, train_dataset, model, optimizer_G, optimizer_D, data_root, train_dataloader, start_iter, flow_backbone, 
+                    iters, val_interval, dataset, save_interval, train_data, batch_size, img_size, 
+                    test_data, trained_model, show_curve, show_heatmap, show_flow):
+        self.train_dataset = train_dataset
+        self.model = model
         self.generator = model.generator
         self.discriminator = model.discriminator
         self.flow_net = model.flow_net
@@ -196,24 +200,27 @@ class Trainer(object):
         return auc
 
 
-    def train_epoch(self):
+    def train(self):
+        step = self.start_iter
         writer = SummaryWriter(f'tensorboard_log/{self.dataset}_bs{self.batch_size}')
         training = True
-        self.model.generator = self.model.generator.train()
-        self.model.discriminator = self.model.discriminator.train()
+        self.generator.train()
+        self.discriminator.train()
         
         for indice, clips, flow_strs in self.train_dataloader:
+            print()
+            print(step)
             input_frames = clips[:, 0:12, :, :].cuda()  # (n, 12, 256, 256)
             target_frame = clips[:, 12:15, :, :].cuda()  # (n, 3, 256, 256)
             input_last = input_frames[:, 9:12, :, :].cuda()  # use for flow_loss
 
-            # pop() the used frame index, this can't work in train_dataset.__getitem__ because of multiprocessing.
-            for index in indice:
-                train_dataset.all_seqs[index].pop()
-                if len(train_dataset.all_seqs[index]) == 0:
-                    train_dataset.all_seqs[index] = list(range(len(train_dataset.videos[index]) - 4))
-                    random.shuffle(train_dataset.all_seqs[index])
-
+            ## pop() the used frame index, this can't work in train_dataset.__getitem__ because of multiprocessing.
+            #for index in indice:
+            #    self.train_dataset.all_seqs[index].pop()
+            #    if len(self.train_dataset.all_seqs[index]) == 0:
+            #        self.train_dataset.all_seqs[index] = list(range(len(train_dataset.videos[index]) - 4))
+            #        random.shuffle(self.train_dataset.all_seqs[index])
+            print(input_frames)
             G_frame, flow_gt, flow_pred = self.model.forward(input_frames, target_frame, input_last)
 
             if self.show_flow:
@@ -231,7 +238,7 @@ class Trainer(object):
             G_l_t = 1. * inte_l + 1. * grad_l + 2. * fl_l + 0.05 * g_l
 
             # When training discriminator, don't train generator, so use .detach() to cut off gradients.
-            D_l = self.discriminate_loss(self.discriminator(target_frame), discriminator(G_frame.detach()))
+            D_l = self.discriminate_loss(self.discriminator(target_frame), self.discriminator(G_frame.detach()))
 
             # https://github.com/pytorch/pytorch/issues/39141
             # torch.optim optimizer now do inplace detection for module parameters since PyTorch 1.5
@@ -318,9 +325,7 @@ class Trainer(object):
                 model_dict = {'net_g': self.generator.state_dict(), 'optimizer_g': self.optimizer_G.state_dict(),
                               'net_d': self.discriminator.state_dict(), 'optimizer_d': self.optimizer_D.state_dict()}
                 torch.save(model_dict, f'weights/latest_{self.dataset}_{step}.pth')
+                print('gx12313213')
                 break
 
 
-    #model_dict = {'net_g': generator.state_dict(), 'optimizer_g': optimizer_G.state_dict(),
-    #              'net_d': discriminator.state_dict(), 'optimizer_d': optimizer_D.state_dict()}
-    #`torch.save(model_dict, f'weights/latest_{self.dataset}_{step}.pth')
