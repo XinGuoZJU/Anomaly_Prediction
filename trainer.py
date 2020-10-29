@@ -21,7 +21,7 @@ from evaluate import val
 
 
 class Trainer(object):
-    def __int__(self, model, optimizer_G, optimizer_D, train_dataloader, start_iter, flow_backbone, show_flow):
+    def __int__(self, model, optimizer_G, optimizer_D, data_root, train_dataloader, start_iter, flow_backbone, iters, val_interval, dataset, save_interval, train_data, batch_size, show_flow):
         self.generator = model.generator
         self.discriminator = model.discriminator
         self.flow_net = model.flow_net
@@ -31,6 +31,21 @@ class Trainer(object):
         self.start_iter = start_iter
         self.flow_backbone = flow_backbone
         self.show_flow = show_flow
+        self.img_size = img_size
+
+        self.iters = iters
+        self.val_interval = val_interval
+        self.dataset = dataset
+        self.save_interval = save_interval
+        self.train_data = train_data
+        self.batch_size = batch_size
+
+        self.test_data = test_data
+        self.trained_model = trained_model
+        self.show_curve = show_curve
+        self.show_heatmap = show_heatmap
+
+        self.data_root = data_root
 
         self.adversarial_loss = Adversarial_Loss().cuda()
         self.discriminate_loss = Discriminate_Loss().cuda()
@@ -38,150 +53,151 @@ class Trainer(object):
         self.flow_loss = Flow_Loss().cuda()
         self.intensity_loss = Intensity_Loss().cuda()
 
-def val(dataset, trained_model, show_curve, show_heatmap, model=None):
-    if model:  # This is for testing during training.
-        generator = model
-        generator.eval()
-    else:
-        generator = UNet(input_channels=12, output_channel=3).cuda().eval()
-        generator.load_state_dict(torch.load('weights/' + cfg.trained_model)['net_g'])
-        print(f'The pre-trained generator has been loaded from \'weights/{cfg.trained_model}\'.\n')
 
-    video_folders = os.listdir(cfg.test_data)
-    video_folders.sort()
-    video_folders = [os.path.join(cfg.test_data, aa) for aa in video_folders]
+    def val(self, model=None):
+        if model:  # This is for testing during training.
+            generator = model
+            generator.eval()
+        else:
+            generator = UNet(input_channels=12, output_channel=3).cuda().eval()
+            generator.load_state_dict(torch.load('weights/' + self.trained_model)['net_g'])
+            print(f'The pre-trained generator has been loaded from \'weights/{self.trained_model}\'.\n')
 
-    fps = 0
-    psnr_group = []
+        video_folders = os.listdir(self.test_data)
+        video_folders.sort()
+        video_folders = [os.path.join(self.test_data, aa) for aa in video_folders]
 
-    if not model:
-        if cfg.show_curve:
-            fig = plt.figure("Image")
-            manager = plt.get_current_fig_manager()
-            manager.window.setGeometry(550, 200, 600, 500)
-            # This works for QT backend, for other backends, check this ⬃⬃⬃.
-            # https://stackoverflow.com/questions/7449585/how-do-you-set-the-absolute-position-of-figure-windows-with-matplotlib
-            plt.xlabel('frames')
-            plt.ylabel('psnr')
-            plt.title('psnr curve')
-            plt.grid(ls='--')
+        fps = 0
+        psnr_group = []
 
-            cv2.namedWindow('target frames', cv2.WINDOW_NORMAL)
-            cv2.resizeWindow('target frames', 384, 384)
-            cv2.moveWindow("target frames", 100, 100)
+        if not model:
+            if self.show_curve:
+                fig = plt.figure("Image")
+                manager = plt.get_current_fig_manager()
+                manager.window.setGeometry(550, 200, 600, 500)
+                # This works for QT backend, for other backends, check this ⬃⬃⬃.
+                # https://stackoverflow.com/questions/7449585/how-do-you-set-the-absolute-position-of-figure-windows-with-matplotlib
+                plt.xlabel('frames')
+                plt.ylabel('psnr')
+                plt.title('psnr curve')
+                plt.grid(ls='--')
 
-        if cfg.show_heatmap:
-            cv2.namedWindow('difference map', cv2.WINDOW_NORMAL)
-            cv2.resizeWindow('difference map', 384, 384)
-            cv2.moveWindow('difference map', 100, 550)
+                cv2.namedWindow('target frames', cv2.WINDOW_NORMAL)
+                cv2.resizeWindow('target frames', 384, 384)
+                cv2.moveWindow("target frames", 100, 100)
 
-    with torch.no_grad():
-        for i, folder in enumerate(video_folders):
-            dataset = Dataset.test_dataset(cfg, folder)
+            if self.show_heatmap:
+                cv2.namedWindow('difference map', cv2.WINDOW_NORMAL)
+                cv2.resizeWindow('difference map', 384, 384)
+                cv2.moveWindow('difference map', 100, 550)
 
-            if not model:
-                name = folder.split('/')[-1]
-                fourcc = cv2.VideoWriter_fourcc('X', 'V', 'I', 'D')
-
-                if cfg.show_curve:
-                    video_writer = cv2.VideoWriter(f'results/{name}_video.avi', fourcc, 30, cfg.img_size)
-                    curve_writer = cv2.VideoWriter(f'results/{name}_curve.avi', fourcc, 30, (600, 430))
-
-                    js = []
-                    plt.clf()
-                    ax = plt.axes(xlim=(0, len(dataset)), ylim=(30, 45))
-                    line, = ax.plot([], [], '-b')
-
-                if cfg.show_heatmap:
-                    heatmap_writer = cv2.VideoWriter(f'results/{name}_heatmap.avi', fourcc, 30, cfg.img_size)
-
-            psnrs = []
-            for j, clip in enumerate(dataset):
-                input_np = clip[0:12, :, :]
-                target_np = clip[12:15, :, :]
-                input_frames = torch.from_numpy(input_np).unsqueeze(0).cuda()
-                target_frame = torch.from_numpy(target_np).unsqueeze(0).cuda()
-
-                G_frame = generator(input_frames)
-                test_psnr = psnr_error(G_frame, target_frame).cpu().detach().numpy()
-                psnrs.append(float(test_psnr))
+        with torch.no_grad():
+            for i, folder in enumerate(video_folders):
+                dataset = Dataset.test_dataset(self.img_size, folder)
 
                 if not model:
-                    if cfg.show_curve:
-                        cv2_frame = ((target_np + 1) * 127.5).transpose(1, 2, 0).astype('uint8')
-                        js.append(j)
-                        line.set_xdata(js)  # This keeps the existing figure and updates the X-axis and Y-axis data,
-                        line.set_ydata(psnrs)  # which is faster, but still not perfect.
-                        plt.pause(0.001)  # show curve
+                    name = folder.split('/')[-1]
+                    fourcc = cv2.VideoWriter_fourcc('X', 'V', 'I', 'D')
 
-                        cv2.imshow('target frames', cv2_frame)
-                        cv2.waitKey(1)  # show video
+                    if self.show_curve:
+                        video_writer = cv2.VideoWriter(f'results/{name}_video.avi', fourcc, 30, self.img_size)
+                        curve_writer = cv2.VideoWriter(f'results/{name}_curve.avi', fourcc, 30, (600, 430))
 
-                        video_writer.write(cv2_frame)  # Write original video frames.
+                        js = []
+                        plt.clf()
+                        ax = plt.axes(xlim=(0, len(dataset)), ylim=(30, 45))
+                        line, = ax.plot([], [], '-b')
 
-                        buffer = io.BytesIO()  # Write curve frames from buffer.
-                        fig.canvas.print_png(buffer)
-                        buffer.write(buffer.getvalue())
-                        curve_img = np.array(Image.open(buffer))[..., (2, 1, 0)]
-                        curve_writer.write(curve_img)
+                    if self.show_heatmap:
+                        heatmap_writer = cv2.VideoWriter(f'results/{name}_heatmap.avi', fourcc, 30, self.img_size)
 
-                    if cfg.show_heatmap:
-                        diff_map = torch.sum(torch.abs(G_frame - target_frame).squeeze(), 0)
-                        diff_map -= diff_map.min()  # Normalize to 0 ~ 255.
-                        diff_map /= diff_map.max()
-                        diff_map *= 255
-                        diff_map = diff_map.cpu().detach().numpy().astype('uint8')
-                        heat_map = cv2.applyColorMap(diff_map, cv2.COLORMAP_JET)
+                psnrs = []
+                for j, clip in enumerate(dataset):
+                    input_np = clip[0:12, :, :]
+                    target_np = clip[12:15, :, :]
+                    input_frames = torch.from_numpy(input_np).unsqueeze(0).cuda()
+                    target_frame = torch.from_numpy(target_np).unsqueeze(0).cuda()
 
-                        cv2.imshow('difference map', heat_map)
-                        cv2.waitKey(1)
+                    G_frame = generator(input_frames)
+                    test_psnr = psnr_error(G_frame, target_frame).cpu().detach().numpy()
+                    psnrs.append(float(test_psnr))
 
-                        heatmap_writer.write(heat_map)  # Write heatmap frames.
+                    if not model:
+                        if self.show_curve:
+                            cv2_frame = ((target_np + 1) * 127.5).transpose(1, 2, 0).astype('uint8')
+                            js.append(j)
+                            line.set_xdata(js)  # This keeps the existing figure and updates the X-axis and Y-axis data,
+                            line.set_ydata(psnrs)  # which is faster, but still not perfect.
+                            plt.pause(0.001)  # show curve
 
-                torch.cuda.synchronize()
-                end = time.time()
-                if j > 1:  # Compute fps by calculating the time used in one completed iteration, this is more accurate.
-                    fps = 1 / (end - temp)
-                temp = end
-                print(f'\rDetecting: [{i + 1:02d}] {j + 1}/{len(dataset)}, {fps:.2f} fps.', end='')
+                            cv2.imshow('target frames', cv2_frame)
+                            cv2.waitKey(1)  # show video
 
-            psnr_group.append(np.array(psnrs))
+                            video_writer.write(cv2_frame)  # Write original video frames.
 
-            if not model:
-                if cfg.show_curve:
-                    video_writer.release()
-                    curve_writer.release()
-                if cfg.show_heatmap:
-                    heatmap_writer.release()
+                            buffer = io.BytesIO()  # Write curve frames from buffer.
+                            fig.canvas.print_png(buffer)
+                            buffer.write(buffer.getvalue())
+                            curve_img = np.array(Image.open(buffer))[..., (2, 1, 0)]
+                            curve_writer.write(curve_img)
 
-    print('\nAll frames were detected, begin to compute AUC.')
+                        if self.show_heatmap:
+                            diff_map = torch.sum(torch.abs(G_frame - target_frame).squeeze(), 0)
+                            diff_map -= diff_map.min()  # Normalize to 0 ~ 255.
+                            diff_map /= diff_map.max()
+                            diff_map *= 255
+                            diff_map = diff_map.cpu().detach().numpy().astype('uint8')
+                            heat_map = cv2.applyColorMap(diff_map, cv2.COLORMAP_JET)
 
-    gt_loader = Label_loader(cfg, video_folders)  # Get gt labels.
-    gt = gt_loader()
+                            cv2.imshow('difference map', heat_map)
+                            cv2.waitKey(1)
 
-    assert len(psnr_group) == len(gt), f'Ground truth has {len(gt)} videos, but got {len(psnr_group)} detected videos.'
+                            heatmap_writer.write(heat_map)  # Write heatmap frames.
 
-    scores = np.array([], dtype=np.float32)
-    labels = np.array([], dtype=np.int8)
-    for i in range(len(psnr_group)):
-        distance = psnr_group[i]
-        distance -= min(distance)  # distance = (distance - min) / (max - min)
-        distance /= max(distance)
+                    torch.cuda.synchronize()
+                    end = time.time()
+                    if j > 1:  # Compute fps by calculating the time used in one completed iteration, this is more accurate.
+                        fps = 1 / (end - temp)
+                    temp = end
+                    print(f'\rDetecting: [{i + 1:02d}] {j + 1}/{len(dataset)}, {fps:.2f} fps.', end='')
 
-        scores = np.concatenate((scores, distance), axis=0)
-        labels = np.concatenate((labels, gt[i][4:]), axis=0)  # Exclude the first 4 unpredictable frames in gt.
+                psnr_group.append(np.array(psnrs))
 
-    assert scores.shape == labels.shape, \
-        f'Ground truth has {labels.shape[0]} frames, but got {scores.shape[0]} detected frames.'
+                if not model:
+                    if self.show_curve:
+                        video_writer.release()
+                        curve_writer.release()
+                    if self.show_heatmap:
+                        heatmap_writer.release()
 
-    fpr, tpr, thresholds = metrics.roc_curve(labels, scores, pos_label=0)
-    auc = metrics.auc(fpr, tpr)
-    print(f'AUC: {auc}\n')
-    return auc
+        print('\nAll frames were detected, begin to compute AUC.')
+
+        gt_loader = Label_loader(video_folders, self.data_root, self.dataset, self.test_data)  # Get gt labels.
+        gt = gt_loader()
+
+        assert len(psnr_group) == len(gt), f'Ground truth has {len(gt)} videos, but got {len(psnr_group)} detected videos.'
+
+        scores = np.array([], dtype=np.float32)
+        labels = np.array([], dtype=np.int8)
+        for i in range(len(psnr_group)):
+            distance = psnr_group[i]
+            distance -= min(distance)  # distance = (distance - min) / (max - min)
+            distance /= max(distance)
+
+            scores = np.concatenate((scores, distance), axis=0)
+            labels = np.concatenate((labels, gt[i][4:]), axis=0)  # Exclude the first 4 unpredictable frames in gt.
+
+        assert scores.shape == labels.shape, \
+            f'Ground truth has {labels.shape[0]} frames, but got {scores.shape[0]} detected frames.'
+
+        fpr, tpr, thresholds = metrics.roc_curve(labels, scores, pos_label=0)
+        auc = metrics.auc(fpr, tpr)
+        print(f'AUC: {auc}\n')
+        return auc
 
 
     def train_epoch(self):
-        writer = SummaryWriter(f'tensorboard_log/{train_cfg.dataset}_bs{train_cfg.batch_size}')
+        writer = SummaryWriter(f'tensorboard_log/{self.dataset}_bs{self.batch_size}')
         training = True
         self.model.generator = self.model.generator.train()
         self.model.discriminator = self.model.discriminator.train()
@@ -204,7 +220,7 @@ def val(dataset, trained_model, show_curve, show_heatmap, model=None):
                 flow = np.array(flow_gt.cpu().detach().numpy().transpose(0, 2, 3, 1), np.float32)  # to (n, w, h, 2)
                 for i in range(flow.shape[0]):
                     aa = flow_to_color(flow[i], convert_to_bgr=False)
-                    path = train_cfg.train_data.split('/')[-3] + '_' + flow_strs[i]
+                    path = self.train_data.split('/')[-3] + '_' + flow_strs[i]
                     cv2.imwrite(f'images/{path}.jpg', aa)  # e.g. images/avenue_4_574-575.jpg
                     print(f'Saved a sample optic flow image from gt frames: \'images/{path}.jpg\'.')
 
@@ -257,7 +273,7 @@ def val(dataset, trained_model, show_curve, show_heatmap, model=None):
 
             if step != self.start_iter:
                 if step % 20 == 0:
-                    time_remain = (train_cfg.iters - step) * iter_t
+                    time_remain = (self.iters - step) * iter_t
                     eta = str(datetime.timedelta(seconds=time_remain)).split('.')[0]
                     psnr = psnr_error(G_frame, target_frame)
                     lr_g = self.optimizer_G.param_groups[0]['lr']
@@ -281,31 +297,30 @@ def val(dataset, trained_model, show_curve, show_heatmap, model=None):
                     writer.add_scalar('G_loss_total/grad_loss', grad_l, global_step=step)
                     writer.add_scalar('psnr/train_psnr', psnr, global_step=step)
 
-                if step % int(train_cfg.iters / 100) == 0:
+                if step % int(self.iters / 100) == 0:
                     writer.add_image('image/G_frame', save_G_frame, global_step=step)
                     writer.add_image('image/target', save_target, global_step=step)
 
-                if step % train_cfg.save_interval == 0:
+                if step % self.save_interval == 0:
                     model_dict = {'net_g': self.generator.state_dict(), 'optimizer_g': self.optimizer_G.state_dict(),
                                   'net_d': self.discriminator.state_dict(), 'optimizer_d': self.optimizer_D.state_dict()}
-                    torch.save(model_dict, f'weights/{train_cfg.dataset}_{step}.pth')
-                    print(f'\nAlready saved: \'{train_cfg.dataset}_{step}.pth\'.')
+                    torch.save(model_dict, f'weights/{self.dataset}_{step}.pth')
+                    print(f'\nAlready saved: \'{self.dataset}_{step}.pth\'.')
 
-                if step % train_cfg.val_interval == 0:
-                    auc = val(train_cfg, model=self.generator)
+                if step % self.val_interval == 0:
+                    auc = val(model=self.generator)
                     writer.add_scalar('results/auc', auc, global_step=step)
                     self.generator.train()
 
             step += 1
-            if step > train_cfg.iters:
+            if step > self.iters:
                 training = False
                 model_dict = {'net_g': self.generator.state_dict(), 'optimizer_g': self.optimizer_G.state_dict(),
                               'net_d': self.discriminator.state_dict(), 'optimizer_d': self.optimizer_D.state_dict()}
-                torch.save(model_dict, f'weights/latest_{train_cfg.dataset}_{step}.pth')
+                torch.save(model_dict, f'weights/latest_{self.dataset}_{step}.pth')
                 break
 
-    train_cfg# iters, val_interval, dataset, save_interval, train_data, batch_size
 
     #model_dict = {'net_g': generator.state_dict(), 'optimizer_g': optimizer_G.state_dict(),
     #              'net_d': discriminator.state_dict(), 'optimizer_d': optimizer_D.state_dict()}
-    #`torch.save(model_dict, f'weights/latest_{train_cfg.dataset}_{step}.pth')
+    #`torch.save(model_dict, f'weights/latest_{self.dataset}_{step}.pth')

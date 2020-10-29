@@ -33,50 +33,59 @@ parser.add_argument('--show_flow', default=False, action='store_true',
 parser.add_argument('--flownet', default='lite', type=str, help='lite: LiteFlownet, 2sd: FlowNet2SD.')
 
 args = parser.parse_args()
-train_cfg = update_config(args, mode='train')
-train_cfg.print_cfg()
+#train_cfg = update_config(args, mode='train')
+#train_cfg.print_cfg()
 
-assert train_cfg.flownet in ('lite', '2sd'), 'Flow net only supports LiteFlownet or FlowNet2SD currently.'
-model = convAE(train_cfg.flownet)
+assert args.flownet in ('lite', '2sd'), 'Flow net only supports LiteFlownet or FlowNet2SD currently.'
+model = convAE(args.flownet)
 generator = model.generator
 discriminator = model.discriminator
 flow_net = model.flow_net
 
-optimizer_G = torch.optim.Adam(generator.parameters(), lr=train_cfg.g_lr)
-optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=train_cfg.d_lr)
+optimizer_G = torch.optim.Adam(generator.parameters(), lr=args.g_lr)
+optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=args.d_lr)
 
-if train_cfg.resume:
-    generator.load_state_dict(torch.load(train_cfg.resume)['net_g'])
-    discriminator.load_state_dict(torch.load(train_cfg.resume)['net_d'])
-    optimizer_G.load_state_dict(torch.load(train_cfg.resume)['optimizer_g'])
-    optimizer_D.load_state_dict(torch.load(train_cfg.resume)['optimizer_d'])
+if args.resume:
+    generator.load_state_dict(torch.load(args.resume)['net_g'])
+    discriminator.load_state_dict(torch.load(args.resume)['net_d'])
+    optimizer_G.load_state_dict(torch.load(args.resume)['optimizer_g'])
+    optimizer_D.load_state_dict(torch.load(args.resume)['optimizer_d'])
     print(f'Pre-trained generator and discriminator have been loaded.\n')
 else:
     generator.apply(weights_init_normal)
     discriminator.apply(weights_init_normal)
     print('Generator and discriminator are going to be trained from scratch.\n')
 
-if train_cfg.flownet == '2sd':
+if args.flownet == '2sd':
     flow_net.load_state_dict(torch.load('models/flownet2/FlowNet2-SD.pth')['state_dict'])
 else:
     flow_net.load_state_dict(torch.load('models/liteFlownet/network-default.pytorch'))
 
 flow_net.cuda().eval()  # Use flow_net to generate optic flows, so set to eval mode.
 
-train_dataset = Dataset.train_dataset(train_cfg)
+train_dataset = Dataset.train_dataset(args.train_data, args.img_size)
 
 # Remember to set drop_last=True, because we need to use 4 frames to predict one frame.
-train_dataloader = DataLoader(dataset=train_dataset, batch_size=train_cfg.batch_size,
+train_dataloader = DataLoader(dataset=train_dataset, batch_size=args.batch_size,
                               shuffle=True, num_workers=4, drop_last=True)
 
-writer = SummaryWriter(f'tensorboard_log/{train_cfg.dataset}_bs{train_cfg.batch_size}')
-start_iter = int(train_cfg.resume.split('_')[-1].split('.')[0]) if train_cfg.resume else 0
+writer = SummaryWriter(f'tensorboard_log/{args.dataset}_bs{args.batch_size}')
+start_iter = int(args.resume.split('_')[-1].split('.')[0]) if args.resume else 0
 
 trainer = Trainer(
     model=model,
     optimizer_G=optimizer_G,
     optimizer_D=optimizer_D,
+    data_root=args.data_root,
     train_dataloader=train_dataloader,
     start_iter=start_iter,
+    flow_backbone=args.batch_size,
+    iters=args.iters,
+    val_interval=args.val_interval,
+    dataset=args.dataset,
+    save_interval=args.save_interval,
+    train_data=args.train_data,
+    batch_size=args.batch_size,
+    show_flow=args.show_flow,
 )
 trainer.train()
